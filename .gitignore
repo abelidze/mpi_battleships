@@ -1,3 +1,7 @@
+# User-defined
+dev/
+*.sublime-*
+
 # Prerequisites
 *.d
 
