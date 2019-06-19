@@ -15,7 +15,7 @@ public:
 
   virtual void Wait();
   virtual void Send(const std::string& data);
-  virtual void Send(const char* data, size_t size);
+  virtual void Send(const char* data, size_t size = 1);
   virtual std::shared_ptr<char> Recv();
   virtual void Disconnect();
 
