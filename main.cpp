@@ -3,7 +3,9 @@
 #include <vector>
 #include <string>
 #include <ctime>
+#include <limits>
 #include <algorithm>
+#include <cstdint>
 
 // #include "include/table_printer.h"
 #include "include/Client.hpp"
@@ -13,6 +15,22 @@
 #define SHIP_COUNT 10
 
 using namespace bs;
+
+struct Package
+{
+ uint8_t code;
+ uint8_t first;
+ uint8_t second;
+ 
+ enum Types
+ {
+  GAMEEND = 0,
+  TURN,
+  HITTED,
+  MISSED,
+  STOP,  
+ };
+};
 
 enum Cell
 {
@@ -44,23 +62,34 @@ bool isValidCommand(const std::string& cmd)
   return cmd.size() == 2 && cmd[0] >= 'a' && cmd[0] <= ('a' + FIELD_SIZE) && cmd[1] >= '0' && cmd[1] <= ('0' + FIELD_SIZE);
 }
 
-bool isCellEmpty(char map[][FIELD_SIZE], const std::string& cmd)
+bool isValidCommand(const Package* msg)
 {
-  auto pos = commandToPosition(cmd);
-  return map[pos.second][pos.first] == EMPTY;
+  return msg->first >= 0 && msg->first < FIELD_SIZE && msg->second >= 0 && msg->second < FIELD_SIZE;
 }
 
-bool isCellHasShip(char map[][FIELD_SIZE], const std::string& cmd)
+bool isCellEmpty(char map[][FIELD_SIZE], int x, int y)
 {
-  auto pos = commandToPosition(cmd);
-  return map[pos.second][pos.first] == SHIP;
+  return map[y][x] == EMPTY;
+}
+
+bool isCellHasShip(char map[][FIELD_SIZE], int x, int y)
+{
+  return map[y][x] == SHIP;
 }
 
 void printMap(char map[][FIELD_SIZE])
 {
-  for (int i = 0; i < FIELD_SIZE; ++i) {
-    for (int j = 0; j < FIELD_SIZE; ++j) {
-      std::cout << map[i][j];
+  for (int i = -1; i < FIELD_SIZE; ++i) {
+    for (int j = -1; j < FIELD_SIZE; ++j) {
+      if (j == -1 && i == -1) {
+        std::cout << "*";
+      } else if (i == -1) {
+        std::cout << (char) ('A' + j);
+      } else if (j == -1) {
+        std::cout << i;
+      } else {
+        std::cout << map[i][j];
+      }
     }
     std::cout << std::endl;
   }
@@ -140,96 +169,121 @@ int main(int argc, char* argv[])
     printMap(myMap);
     int lifes = SHIP_COUNT;
 
+    // Clear buffered data
+    std::cin.clear();
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
     // Start game loop
     std::string command;
+    Package payload;
     bool isPlaying = true;
     bool myTurn = mode == 's';
     while (isPlaying) {
       if (myTurn) {
         // Wait && Validate input
-        do {
+        payload.code = Package::TURN;
+        while (true) {
           std::cout << std::endl << "Your turn (ex. B3): ";
           std::getline(std::cin, command);
-          std::transform(command.begin(), command.end(), command.begin(), ::tolower);
-        } while (!isValidCommand(command) || !isCellEmpty(opMap, command));
+
+          if (command.size() > 1) {
+            std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+            payload.first = command[0] - 'a';
+            payload.second = std::atoi(command.c_str() + 1);
+
+            if (isValidCommand(&payload) && isCellEmpty(opMap, payload.first, payload.second)) {
+              break;
+            }
+          }
+        }
 
         // Send turn
-        net->Send(command);
+        net->Send((char*) &payload, sizeof(Package));
 
         // Recv and update opponent's field
-        auto data = net->Recv();
-        auto pos = commandToPosition(command);
-        switch (data.get()[0]) {
-          case 'x':
-            opMap[pos.second][pos.first] = HIT;
+        auto data = (Package*) net->Recv().get();
+        switch (data->code) {
+          case Package::HITTED:
+            opMap[data->second][data->first] = HIT;
+            std::cout << "Opponent map:" << std::endl;
+            printMap(opMap);
             break;
 
-          case 'o':
-            opMap[pos.second][pos.first] = MISS;
+          case Package::MISSED:
+            opMap[data->second][data->first] = MISS;
+            std::cout << "Opponent map:" << std::endl;
+            printMap(opMap);
             break;
 
-          case 'w':
+          case Package::GAMEEND:
             std::cout << "You won!" << std::endl;
             isPlaying = false;
             break;
 
-          case 'q':
+          case Package::STOP:
             std::cout << "Opponent breaks the game" << std::endl;
             isPlaying = false;
             break;
         }
 
-        // Print map
-        std::cout << "Opponent map:" << std::endl;
-        printMap(opMap);
-
       } else {
         // Recv turn && validate
-        auto data = net->Recv();
-        command = std::string(data.get());
-        if (!isValidCommand(command)) {
-          net->Send("q");
+        std::cout << std::endl << "Waiting for opponent's turn..." << std::endl;
+        auto data = (Package*) net->Recv().get();
+        if (!isValidCommand(data) || data->code != Package::TURN) {
+          payload.code = Package::STOP;
           isPlaying = false;
-          break;
         }
 
         // Check && update your field
-        auto pos = commandToPosition(command);
-        if (isCellHasShip(myMap, command)) {
-          if (--lifes <= 0) {
-            std::cout << "You lose!" << std::endl;
-            net->Send("w");
+        if (isPlaying) {
+          if (isCellHasShip(myMap, data->first, data->second)) {
+            myMap[data->second][data->first] = HIT;
+            if (--lifes <= 0) {
+              std::cout << "You lose!" << std::endl;
+              payload.code = Package::GAMEEND;
+              isPlaying = false;
+            } else {
+              payload.code = Package::HITTED;
+            }
+
+          } else if (isCellEmpty(myMap, data->first, data->second)) {
+            myMap[data->second][data->first] = MISS;
+            payload.code = Package::MISSED;
+
+          } else {
+            payload.code = Package::STOP;
             isPlaying = false;
-            break;
           }
-          myMap[pos.second][pos.first] = HIT;
-          net->Send("x");
-
-        } else if (isCellEmpty(myMap, command)) {
-          myMap[pos.second][pos.first] = MISS;
-          net->Send("o");
-
-        } else {
-          net->Send("q");
-          isPlaying = false;
-          break;
         }
 
+        // Send response
+        payload.first = data->first;
+        payload.second = data->second;
+        net->Send((char*) &payload, sizeof(Package));
+
         // Print map
-        std::cout << "My map:" << std::endl;
-        printMap(myMap);
+        if (isPlaying) {
+          std::cout << "My map:" << std::endl;
+          printMap(myMap);
+        }
       }
       myTurn = !myTurn;
     }
 
     // Testing
-    // std::cout << "Enter message to send: ";
-    // std::string message;
-    // std::cin >> message;
-    // net->Send(message);
+    // std::cout << "Enter code to send: ";
+    // Package message;
+    // int x = 0;
+    // std::cin >> x;
+    // message.code = (char) x;
+    // net->Send((char*) &message, sizeof(Package));
 
     // auto data = net->Recv();
-    // std::cout << "Received: " << data.get() << std::endl;
+    // Package* payload = (Package*) data.get();
+    // std::cout << "Code: " << (int) payload->code << std::endl;
+    // std::cout << "First: " << (int) payload->first << std::endl;
+    // std::cout << "Second: " << (int) payload->second << std::endl;
 
     net->Disconnect();
 

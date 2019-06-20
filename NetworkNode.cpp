@@ -31,17 +31,17 @@ void NetworkNode::Send(const std::string& data)
 
 void NetworkNode::Send(const char* data, size_t size)
 {
-  MPI_Send(data, size, MPI_CHAR, 0, 0, this->intercomm);
+  MPI_Send(data, size, MPI_BYTE, 0, 0, this->intercomm);
 }
 
 std::shared_ptr<char> NetworkNode::Recv()
 {
   int size = 0;
   MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, this->intercomm, &this->status);
-  MPI_Get_count(&this->status, MPI_CHAR, &size);
+  MPI_Get_count(&this->status, MPI_BYTE, &size);
 
-  std::shared_ptr<char> buffer(new char[size]);
-  MPI_Recv(buffer.get(), size, MPI_CHAR, 0, 0, intercomm, MPI_STATUS_IGNORE);
+  std::shared_ptr<char> buffer = std::make_shared<char>(size);
+  MPI_Recv(buffer.get(), size, MPI_BYTE, 0, 0, intercomm, MPI_STATUS_IGNORE);
   return buffer;
 }
 
